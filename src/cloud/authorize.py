@@ -15,7 +15,7 @@ def check_token(f):
             return {"message": "Authentication Token is missing!", "data": None, "error": "Unauthorized"}, 401
 
         try:
-            with open('./keys/jwtkey_pub.pem', 'rb') as file:
+            with open('./keys/jwt_pub.pem', 'rb') as file:
                 key = file.read()
                 user = jwt.decode(token, key, algorithms="EdDSA")
         except Exception:

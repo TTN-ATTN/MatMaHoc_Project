@@ -7,8 +7,11 @@ from ui.upload import UploadUI
 from ui.add_user import AddUserUI
 import requests
 import json
+from abe_core import SelfAES, ABE, objectToBytes, bytesToObject
+from base64 import b64encode, b64decode
+import os
 
-AUTHORITY_SERVER = "http://127.0.0.1:5000"
+AUTHORITY_SERVER = "http://127.0.0.1:5050"
 STORAGE_SERVER = "http://127.0.0.1:8000"
 
 class HealthcareApp:
@@ -19,47 +22,68 @@ class HealthcareApp:
         self.current_token = None
         self.current_ui = None
         self.dashboard_ui = None
+        self.session = requests.Session() 
+        
+        # Add ABE components from first version
+        self.abe = ABE()
+        self.self_aes = SelfAES()
+        
         self.show_login()
     
+    # Add ABE helper methods from first version
+    def encrypt_data(self, data, policy):
+        """Encrypt data using ABE with specified policy"""
+        try:
+            data_bytes = objectToBytes(data)
+            encrypted_data = self.abe.encrypt(data_bytes, policy)
+            return b64encode(encrypted_data).decode('utf-8')
+        except Exception as e:
+            messagebox.showerror("Encryption Error", f"Failed to encrypt data: {str(e)}")
+            return None
+    
+    def decrypt_data(self, encrypted_data, user_attributes):
+        """Decrypt ABE encrypted data using user attributes"""
+        try:
+            encrypted_bytes = b64decode(encrypted_data.encode('utf-8'))
+            decrypted_bytes = self.abe.decrypt(encrypted_bytes, user_attributes)
+            return bytesToObject(decrypted_bytes)
+        except Exception as e:
+            messagebox.showerror("Decryption Error", f"Failed to decrypt data: {str(e)}")
+            return None
+
     def show_login(self):
         self.clear_current_ui()
         self.login_ui = LoginUI(self.root, self.handle_login)
     
     def handle_login(self, username, password):
         try:
+            login_data = {
+                'username': username,
+                'password': password
+            }
+            
             login_response = requests.post(
                 f"{AUTHORITY_SERVER}/login",
                 data={'username': username, 'password': password},
-                timeout=5
+                timeout=10
             )
             
             if login_response.status_code == 200:
-                user_data = login_response.json()
-                self.current_user = username
-                self.current_role = self.determine_role(user_data.get('attributes', []))
+                response_data = login_response.json()
+                self.current_user = response_data.get('username')
+                self.current_role = response_data.get('role')
+                self.current_token = response_data.get('token')
                 
-                # Get JWT token
-                token_response = requests.post(
-                    f"{AUTHORITY_SERVER}/token",
-                    json={
-                        'user_id': user_data.get('user_id'),
-                        'attributes': user_data.get('attributes', [])
-                    },
-                    headers={'Content-Type': 'application/json'},
-                    timeout=15
-                )
+                # Store user attributes for ABE decryption
+                self.user_attributes = response_data.get('attributes', [])
                 
-                if token_response.status_code == 200:
-                    self.current_token = token_response.json().get('token')
-                    self.show_dashboard()
-                else:
-                    messagebox.showerror("Login Failed", "Token generation failed")
+                self.show_dashboard()
             else:
                 messagebox.showerror("Login Failed", "Invalid credentials")
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("Connection Error", f"Failed to connect to server: {str(e)}")
+                
         except Exception as e:
-            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
+            messagebox.showerror("Connection Error", f"Could not connect to server: {str(e)}")
+
     
     def determine_role(self, attributes):
         """Determine the highest privilege role from attributes"""
@@ -142,67 +166,62 @@ class HealthcareApp:
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
     
-    def handle_search(self, search_params):
-        """Handle search functionality"""
+    def handle_search(self, search_criteria):
+        """Handle patient data search with ABE decryption"""
         try:
-            if not self.current_token:
-                messagebox.showerror("Error", "Not authenticated")
-                return
-                
-            # Prepare request to storage server
-            headers = {
-                'Authorization': f'Bearer {self.current_token}',
-                'Content-Type': 'application/json'
-            }
-            
-            # Convert search parameters to query string
-            data = {
-                'patient_id': search_params.get('patient_id', ''),
-                'patient_name': search_params.get('patient_name', ''),
-                'record_type': search_params.get('record_type', 'health_records')
-            }
-            
-            response = requests.get(
-                f"{STORAGE_SERVER}/api/{data['record_type']}",
-                headers=headers,
-                data=data,
-                timeout=5
+            search_response = requests.post(
+                f"{STORAGE_SERVER}/search",
+                json=search_criteria,
+                headers={'Authorization': f'Bearer {self.current_token}'}
             )
             
-            if response.status_code == 200:
-                data = response.json()
-                messagebox.showinfo("Search Results", 
-                                  f"Found {data.get('count', 0)} records")
-               
+            if search_response.status_code == 200:
+                encrypted_results = search_response.json().get('results', [])
+                
+                # Decrypt each result using user attributes
+                decrypted_results = []
+                for encrypted_result in encrypted_results:
+                    decrypted_data = self.decrypt_data(
+                        encrypted_result['data'], 
+                        self.user_attributes
+                    )
+                    
+                    if decrypted_data:
+                        decrypted_results.append(decrypted_data)
+                
+                # Display results in UI
+                self.display_search_results(decrypted_results)
+                
             else:
-                messagebox.showerror("Search Failed", 
-                                   f"Server returned {response.status_code}: {response.text[:200]}")
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("Connection Error", f"Failed to connect to server: {str(e)}")
+                messagebox.showerror("Search Failed", "Could not retrieve data")
+                
         except Exception as e:
-            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
+            messagebox.showerror("Search Error", f"Search failed: {str(e)}")
+
     
     def handle_upload(self, upload_params):
         """Handle file upload functionality"""
         messagebox.showinfo("Info", "Upload feature not implemented yet")
     
-    def handle_logout(self):
+    def logout(self):
+        """Handle user logout and cleanup"""
         try:
-            if self.current_token:
-                requests.post(
-                    f"{AUTHORITY_SERVER}/logout",
-                    headers={'Authorization': f'Bearer {self.current_token}'},
-                    timeout=5
-                )
-        except:
-            pass
+            # Send logout request to server
+            self.session.post(
+                f"{AUTHORITY_SERVER}/logout",
+                headers={'Authorization': f'Bearer {self.current_token}'}
+            )
+        except Exception as e:
+            print(f"Logout error: {e}")
+        finally:
+            # Clean up session data
+            self.current_user = None
+            self.current_role = None
+            self.current_token = None
+            self.user_attributes = []
+            self.session.close()
+            self.show_login()
         
-        self.current_user = None
-        self.current_role = None
-        self.current_token = None
-        self.dashboard_ui = None  
-        self.show_login()
-    
     def clear_current_ui(self):
         try:
             for widget in self.root.winfo_children():

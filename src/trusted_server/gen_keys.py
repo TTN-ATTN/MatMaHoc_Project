@@ -1,31 +1,36 @@
-from processing import ABE, SelfAES, TPM
-from charm.core.engine.util import objectToBytes
+# trusted_server/gen_keys.py
+from flask import Blueprint, request, jsonify
 from charm.toolbox.pairinggroup import PairingGroup
-from Crypto.PublicKey import ECC
+from charm.schemes.abenc.abenc_bsw07 import CPabe_BSW07
+from charm.core.engine.util import objectToBytes, bytesToObject
+import json
 import os
+from processing import MyAES, ABE
+from Crypto.PublicKey import ECC
 
+aes_key = os.urandom(32)
 
-aes_key = os.urandom(64)
+with open("./keys/aes.key", "wb") as f:
+    f.write(aes_key)
 
-TPM.encrypt(aes_key, './keys/aeskeys.enc')
-
-pairing_group = PairingGroup("SS512")
+pairinggroup = PairingGroup('SS512')
 abe = ABE()
-pk, mk = abe.setupKey()
+pk, mk = abe.setup()
 
-aes = SelfAES()
-with open('./keys/pk_key', 'wb') as f:
-    f.write(aes.encrypt(objectToBytes(pk, pairing_group)))
-with open('./keys/mk_key', 'wb') as f:
-    f.write(aes.encrypt(objectToBytes(mk, pairing_group)))
+aes = MyAES()
+with open("./keys/pk.enc", "wb") as f:
+    f.write(aes.encrypt(objectToBytes(pk, pairinggroup)))
+
+with open("./keys/mk.enc", "wb") as f:
+    f.write(aes.encrypt(objectToBytes(mk, pairinggroup)))
     
-private_key = ECC.generate(curve='ed25519')
+private_key = ECC.generate(curve="ed25519")
 public_key = private_key.public_key()
 
 private_key_pem = private_key.export_key(format='PEM')
 public_key_pem = public_key.export_key(format='PEM')
 
-with open('./keys/jwtkey_priv.pem.enc', 'wb') as f:
+with open("./keys/jwt_priv_key.pem", "wb") as f:
     f.write(aes.encrypt(private_key_pem))
-with open('./keys/jwtkey_pub.pem', 'wb') as f:
+with open("./keys/jwt_pub_key.pem", "wb") as f:
     f.write(public_key_pem.encode())

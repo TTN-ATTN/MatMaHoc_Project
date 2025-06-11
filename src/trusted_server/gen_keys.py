@@ -5,7 +5,9 @@ from Crypto.PublicKey import ECC
 import os
 
 
-aes_key = os.urandom(64)
+aes_key = os.urandom(32)
+with open("./keys/aes.key", "wb") as f:
+    f.write(aes_key)
 
 pairing_group = PairingGroup("SS512")
 abe = ABE()

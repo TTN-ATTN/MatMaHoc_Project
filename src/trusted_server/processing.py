@@ -9,7 +9,7 @@ import subprocess
     
 class SelfAES:
     def __init__(self):
-        self.key = TPM.decrypt('./keys/aeskey.enc')[:32]
+        self.key = open("./keys/aes.key", "rb").read()
 
     def encrypt(self, data):
         if type(data) != type(b''):

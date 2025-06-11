@@ -1,78 +1,110 @@
-# trusted_server/processing.py
-from pymongo import MongoClient
-import hashlib
-import os
-import jwt
-from Crypto.Cipher import AES
 from charm.toolbox.pairinggroup import PairingGroup
 from charm.schemes.abenc.abenc_bsw07 import CPabe_BSW07
 from charm.core.engine.util import objectToBytes, bytesToObject
+from Crypto.Cipher import AES
+from hashlib import sha512
+import jwt
 import time
-class Hash:
-    def hash_password(password):
-        """Hash a password using SHA-256"""
-        if type(password) != type(b''):
-            password = password.encode()
-        return hashlib.sha256(password).hexdigest()
+import subprocess
     
-class MyAES:
+class TPM:
+    def encrypt(data, file_name):
+        if type(data) != type(b''):
+            data = data.encode()
+        
+        subprocess.run(["sudo", "tpm2_createprimary", "-Q", "-C", "o", "-c", "prim.ctx"])
+        command = "sudo tpm2_create -Q -g sha256 -u seal.pub -r seal.priv -i- -C prim.ctx".split()
+        subprocess.run(command, input=data)
+        command = "sudo tpm2_load -Q -C prim.ctx -u seal.pub -r seal.priv -n seal.name -c {}".format(file_name).split()
+        subprocess.run(command)
+        command = "sudo tpm2_evictcontrol -C o -c {} 0x81010001".format(file_name).split()
+        subprocess.run(command)
+        
+    def decrypt(file_name):
+        try:
+            command = "sudo tpm2_unseal -Q -c 0x81010001".split()
+            data = subprocess.check_output(command)
+            
+            return data
+        except:
+            command = "sudo tpm2_evictcontrol -C o -c {} 0x81010001".format(file_name).split()
+            subprocess.run(command)
+            command = "sudo tpm2_unseal -Q -c 0x81010001".split()
+            data = subprocess.check_output(command)
+            
+            return data
+    
+class SelfAES:
     def __init__(self):
-        self.key = open("./keys/aes.key", "rb").read()
-    
+        self.key = TPM.decrypt('./opt/aeskey.enc')[:32]
+
     def encrypt(self, data):
         if type(data) != type(b''):
             data = data.encode()
         
-        cipher = AES.new(self.key, AES.MODE_GCM)
-        ciphertext, tag = cipher.encrypt_and_digest(data)
-        return cipher.nonce + tag + ciphertext
+        Cipher = AES.new(self.key, AES.MODE_GCM)
+        ciphertext, tag = Cipher.encrypt_and_digest(data)
+        
+        return Cipher.nonce + ciphertext + tag
     
     def decrypt(self, data):
-        ciphert = AES.new(self.key, AES.MODE_GCM, nonce=data[:16])
-        tag = data[16:32]
-        ciphertext = data[32:]
+        Cipher = AES.new(self.key, AES.MODE_GCM, data[:16])
         
-        return ciphert.decrypt_and_verify(ciphertext, tag)
-    
+        return Cipher.decrypt_and_verify(data[16:-16], data[-16:])
+        
 class ABE:
-    def __init__ (self):
+    def __init__(self):
         self.group = PairingGroup('SS512')
         self.cpabe = CPabe_BSW07(self.group)
     
-    def setup(self):
+    def setupKey(self):
         return self.cpabe.setup()
-    # Lay masterpublic key
-    def getMasterPublickey(self):
-        aes = MyAES()
-        with open("./keys/pk.enc", "rb") as f:
+    
+    def getMasterPublicKey(self):
+        aes = SelfAES()
+        with open('./opt/pk_key', 'rb') as f:
             pk = aes.decrypt(f.read())
-        return pk
-    # Generate DecryptionKey for user
-    def genDecryptionKey(self, attributes: list):
-        aes = MyAES()
-        self.pk = bytesToObject(self.getMasterPublickey(), self.group)
-        with open("./keys/mk.enc", "rb") as f:
+            
+            return pk
+    
+    def genDecryptKey(self, attribute: list):
+        aes = SelfAES()
+        with open('./opt/pk_key', 'rb') as f:
+            tmp = aes.decrypt(f.read())
+            self.pk = bytesToObject(tmp, self.group)
+        with open('./opt/mk_key', 'rb') as f:
             tmp = aes.decrypt(f.read())
             self.mk = bytesToObject(tmp, self.group)
+
+        dk = self.cpabe.keygen(self.pk, self.mk, attribute)
         
-        dk = self.cpabe.keygen(self.pk, self.mk, attributes)
         return objectToBytes(dk, self.group)
-        
-class MyJWT:
+    
+class SelfJWT:
     def __init__(self):
-        with open("./keys/jwt_priv_key.pem", "rb") as f:
+        with open("./opt/jwtkey_priv.pem.enc", "rb") as f:
             encrypted_key = f.read()
-            aes = MyAES()
-            self.secret_key = aes.decrypt(encrypted_key).decode()
-    def encode(self, attributes, user_id):
-        exptime = str(round(time.time()) + 3600)
-        payload = {
+            aes = SelfAES()
+            self.key = aes.decrypt(encrypted_key)
+    
+    def encode(self, attribute, user_id):
+        exp_time = str(round(time.time()) + 3600) 
+
+        data = {
             'user_id': user_id,
-            'attributes': attributes,
-            'exp': exptime
+            'attribute':attribute,
+            'expiry':exp_time
         }
-        enc_token = jwt.encode(payload, self.secret_key, algorithm='EdDSA')
-        return enc_token
+
+        enc_data = jwt.encode(
+            data, self.key, algorithm='EdDSA'
+        )
+        
+        return enc_data
     
-    
-            
+class Hash:
+    def hashing(data):
+        if type(data) != type(b''):
+            data = data.encode()
+        
+        return sha512(data).hexdigest()

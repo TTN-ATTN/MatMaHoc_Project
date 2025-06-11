@@ -20,6 +20,8 @@ class ABAC:
     invoice_policy = "financial"
     medicine_policy = "DOCTOR or pharmacist or PATIENT"
     research_report_policy = "(DOCTOR or researcher)"
+    
+    Demo policy
     '''
     
     def __init__(self):

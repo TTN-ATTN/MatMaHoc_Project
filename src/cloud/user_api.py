@@ -1,4 +1,3 @@
-import hashlib
 from flask import Blueprint, request, jsonify
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError
@@ -11,8 +10,6 @@ def DBConnect():
         client.server_info()
     except ServerSelectionTimeoutError:
         client = MongoClient("mongodb://localhost:27017/")
-    # client.drop_database("user")
-    # print("Database cleared for fresh start")  
     db = client["user"]
     collection = db['user_data']
     
@@ -23,7 +20,7 @@ def DBConnect():
         admin_user = {
             'user_id': 1,
             'username': 'admin',
-            'hash_password': hashlib.sha256('admin123'.encode()).hexdigest(),
+            'hash_password': 'b109f3bbbc244eb82441917ed06d618b9008dd09b3befd1b5e07394c706a8bb980b1d7785e5976ec049b46df5f1326af5a2ea6d103fd07c95385ffab0cacbc86',
             'attribute': '{"ATTR": ["administrator"]}'
         }
         collection.insert_one(admin_user)

@@ -1,9 +1,9 @@
-from processing import MyAES, Hash
+from processing import SelfAES, Hash
 from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify
 from urllib.parse import urljoin
 import requests, json
 
-CLOUD_DOMAIN = "localhost:5000" 
+CLOUD_DOMAIN = "https://hackeverythingsgg.id.vn"
 
 login_api = Blueprint('login_api', __name__, template_folder='template')
 
@@ -27,7 +27,7 @@ def login():
                 session['username'] = username
                 if session['username'] != 'admin':
                     attribute = bytes.fromhex(user_info['attribute'])
-                    aes = MyAES()
+                    aes = SelfAES()
                     attribute = json.loads(aes.decrypt(attribute).decode())
                 else:
                     attribute = json.loads(user_info['attribute'])
@@ -57,7 +57,7 @@ def register():
         password = request.form['password']
         attribute = request.form['attribute']
 
-        aes = MyAES()
+        aes = SelfAES()
         attribute = '{{"ATTR": {}}}'.format(json.dumps([attr.strip() for attr in attribute.split(',')]))
         enc_attribute = aes.encrypt(attribute).hex()
 

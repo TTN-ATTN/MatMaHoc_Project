@@ -1,4 +1,4 @@
-from processing import ABE, MyJWT
+from processing import ABE, SelfJWT
 from flask import Blueprint, jsonify, request, session
 from ast import literal_eval
 
@@ -30,8 +30,8 @@ def getToken():
         user_id = post_data['ID']
         attribute = str(post_data['attribute'])
         
-        MyJWT = MyJWT()
-        token = MyJWT.encode(attribute, user_id)
+        selfjwt = SelfJWT()
+        token = selfjwt.encode(attribute, user_id)
         
         return token, 200
     else:

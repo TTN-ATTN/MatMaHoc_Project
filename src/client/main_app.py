@@ -1,243 +1,361 @@
-import tkinter as tk
-from tkinter import messagebox
-from ui.login import LoginUI
-from ui.dashboard import DashboardUI
-from ui.search import SearchUI
-from ui.upload import UploadUI
-from ui.add_user import AddUserUI
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout
+from PyQt5.QtCore import pyqtSlot
+from app.login import Ui_LoginWindow
+from app.menu import Ui_MenuWindow
+from app.search import Ui_SearchWindow
+from app.push_data import Ui_PushWindow
+from app.update_data import Ui_UpdateWindow
+from app.view import Ui_ViewWindow
+from urllib.parse import urljoin
 import requests
-import json
-from abe_core import SelfAES, ABE, objectToBytes, bytesToObject
-from base64 import b64encode, b64decode
 import os
 
-AUTHORITY_SERVER = "http://127.0.0.1:5050"
-STORAGE_SERVER = "http://127.0.0.1:8000"
+from abe_core import SelfAES, ABE, objectToBytes, bytesToObject
+from base64 import b64encode, b64decode
 
-class HealthcareApp:
+TRUSTED_AUTHORITY = "http://localhost:5050" 
+CLOUD_DOMAIN = "http://localhost:8000"
+
+session = requests.Session()
+
+class MainWindow(QMainWindow, Ui_LoginWindow):
     def __init__(self):
-        self.root = tk.Tk()
-        self.current_user = None
-        self.current_role = None
-        self.current_token = None
-        self.current_ui = None
-        self.dashboard_ui = None
-        self.session = requests.Session() 
-        
-        # Add ABE components from first version
-        self.abe = ABE()
-        self.self_aes = SelfAES()
-        
-        self.show_login()
-    
-    # Add ABE helper methods from first version
-    def encrypt_data(self, data, policy):
-        """Encrypt data using ABE with specified policy"""
-        try:
-            data_bytes = objectToBytes(data)
-            encrypted_data = self.abe.encrypt(data_bytes, policy)
-            return b64encode(encrypted_data).decode('utf-8')
-        except Exception as e:
-            messagebox.showerror("Encryption Error", f"Failed to encrypt data: {str(e)}")
-            return None
-    
-    def decrypt_data(self, encrypted_data, user_attributes):
-        """Decrypt ABE encrypted data using user attributes"""
-        try:
-            encrypted_bytes = b64decode(encrypted_data.encode('utf-8'))
-            decrypted_bytes = self.abe.decrypt(encrypted_bytes, user_attributes)
-            return bytesToObject(decrypted_bytes)
-        except Exception as e:
-            messagebox.showerror("Decryption Error", f"Failed to decrypt data: {str(e)}")
-            return None
+        super(MainWindow, self).__init__()
+        self.setupUi(self)
 
-    def show_login(self):
-        self.clear_current_ui()
-        self.login_ui = LoginUI(self.root, self.handle_login)
-    
-    def handle_login(self, username, password):
-        try:
-            login_data = {
-                'username': username,
-                'password': password
-            }
-            
-            login_response = requests.post(
-                f"{AUTHORITY_SERVER}/login",
-                data={'username': username, 'password': password},
-                timeout=10
-            )
-            
-            if login_response.status_code == 200:
-                response_data = login_response.json()
-                self.current_user = response_data.get('username')
-                self.current_role = response_data.get('role')
-                self.current_token = response_data.get('token')
-                
-                # Store user attributes for ABE decryption
-                self.user_attributes = response_data.get('attributes', [])
-                
-                self.show_dashboard()
-            else:
-                messagebox.showerror("Login Failed", "Invalid credentials")
-                
-        except Exception as e:
-            messagebox.showerror("Connection Error", f"Could not connect to server: {str(e)}")
+    @pyqtSlot()
+    def on_pushButton_clicked(self):
+        username = self.username_textbox.text()
+        password = self.password_textbox.text()
 
-    
-    def determine_role(self, attributes):
-        """Determine the highest privilege role from attributes"""
-        role_priority = ['admin', 'doctor', 'nurse', 'researcher', 'patient']
-        for role in role_priority:
-            if role in attributes:
-                return role
-        return 'patient'  
-    
-    def show_dashboard(self):
-        """Display the main dashboard"""
-        self.clear_current_ui()
-        
-        button_callbacks = {
-            'search': self.show_search,
-            'upload': self.show_upload,
-            'logout': self.handle_logout,
-            'add_user': self.show_add_user if self.current_role == 'admin' else None
+        data = {
+            'username': username,
+            'password': password
         }
+        response = session.post(urljoin(TRUSTED_AUTHORITY, '/login'), data=data)
+
+        if response.status_code == 200:
+            data = response.json()
+            
+            self.uid_text = str(data['ID'])
+            
+            self.show_menu()
+            self.init_keys(data)
+        else:
+            self.popup(response.text)
+
+    def show_menu(self):
+        w = Ui_MenuWindow()
+        w.setupUi(self)
+        w.text_label.setText("UID: " + self.uid_text)
         
-        try:
-            self.dashboard_ui = DashboardUI(
-                self.root, 
-                self.current_user, 
-                self.current_role, 
-                button_callbacks
-            )
-            self.current_ui = self.dashboard_ui
-        except Exception as e:
-            messagebox.showerror("Dashboard Error", f"Failed to load dashboard: {str(e)}")
+    def init_keys(self, data):
+        response = session.post(urljoin(TRUSTED_AUTHORITY, '/token'), json=data)
+        self.token = response.text
+        self.attribute = data['attribute']
+        
+        temp = []
+        for attr in self.attribute:
+            if attr == 'patient':
+                temp.append('PATIENT'+str(data['ID']))
+            else:
+                temp.append(attr)
+        self.attribute = [attr.upper().replace('_', '') for attr in temp]
+        
+        response = session.post(urljoin(TRUSTED_AUTHORITY, '/get_keys'), json={'attribute': str(self.attribute)})
+        keys = response.json()
+        self.dk_key = keys['dk_key']
+        self.pk_key = keys['pk_key']
+
+
+    @pyqtSlot()
+    def on_search_button_clicked(self):
+        self.show_search()
     
     def show_search(self):
-        """Display the search interface"""
-        if self.dashboard_ui and hasattr(self.dashboard_ui, 'content_frame'):
-            try:
-                self.search_ui = SearchUI(
-                    self.dashboard_ui.content_frame, 
-                    self.handle_search
-                )
-            except Exception as e:
-                messagebox.showerror("Search UI Error", f"Failed to load search interface: {str(e)}")
-        else:
-            messagebox.showerror("Error", "Dashboard not properly initialized")
+        w = Ui_SearchWindow()
+        w.setupUi(self)
+        self.search_combo_box = w.combo_box
+        self.search_userid = w.userid_textbox
+        self.search_name = w.name_textbox
     
-    def show_upload(self):
-        """Display the upload interface"""
-        if self.dashboard_ui and hasattr(self.dashboard_ui, 'content_frame'):
-            try:
-                self.upload_ui = UploadUI(
-                    self.dashboard_ui.content_frame, 
-                    self.handle_upload,
-                )
-            except Exception as e:
-                messagebox.showerror("Upload UI Error", f"Failed to load upload interface: {str(e)}")
-        else:
-            messagebox.showerror("Error", "Dashboard not properly initialized")
-    
-    def show_add_user(self):
-        """Display the add user interface for admin"""
-        if self.dashboard_ui and hasattr(self.dashboard_ui, 'content_frame'):
-            try:
-                self.add_user_ui = AddUserUI(
-                    self.dashboard_ui.content_frame, 
-                    self.handle_add_user
-                )
-            except Exception as e:
-                messagebox.showerror("Add User Error", f"Failed to load add user interface: {str(e)}")
-        else:
-            messagebox.showerror("Error", "Dashboard not properly initialized")
-
-    def handle_add_user(self, user_data):
-        """Handle adding a new user"""
-        try:
-            if not self.current_token:
-                messagebox.showerror("Error", "Not authenticated")
-                return
-                
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("Connection Error", f"Failed to connect to server: {str(e)}")
-        except Exception as e:
-            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
-    
-    def handle_search(self, search_criteria):
-        """Handle patient data search with ABE decryption"""
-        try:
-            search_response = requests.post(
-                f"{STORAGE_SERVER}/search",
-                json=search_criteria,
-                headers={'Authorization': f'Bearer {self.current_token}'}
-            )
-            
-            if search_response.status_code == 200:
-                encrypted_results = search_response.json().get('results', [])
-                
-                # Decrypt each result using user attributes
-                decrypted_results = []
-                for encrypted_result in encrypted_results:
-                    decrypted_data = self.decrypt_data(
-                        encrypted_result['data'], 
-                        self.user_attributes
-                    )
-                    
-                    if decrypted_data:
-                        decrypted_results.append(decrypted_data)
-                
-                # Display results in UI
-                self.display_search_results(decrypted_results)
-                
-            else:
-                messagebox.showerror("Search Failed", "Could not retrieve data")
-                
-        except Exception as e:
-            messagebox.showerror("Search Error", f"Search failed: {str(e)}")
-
-    
-    def handle_upload(self, upload_params):
-        """Handle file upload functionality"""
-        messagebox.showinfo("Info", "Upload feature not implemented yet")
-    
-    def logout(self):
-        """Handle user logout and cleanup"""
-        try:
-            # Send logout request to server
-            self.session.post(
-                f"{AUTHORITY_SERVER}/logout",
-                headers={'Authorization': f'Bearer {self.current_token}'}
-            )
-        except Exception as e:
-            print(f"Logout error: {e}")
-        finally:
-            # Clean up session data
-            self.current_user = None
-            self.current_role = None
-            self.current_token = None
-            self.user_attributes = []
-            self.session.close()
-            self.show_login()
+    @pyqtSlot()
+    def on_search_api_button_clicked(self):
+        headers = {'Authorization': self.token}
+        data = {
+            'uid': self.search_userid.text(),
+            'patient_name': self.search_name.text(),
+            'collection_name': self.search_combo_box.currentText()
+        }
         
-    def clear_current_ui(self):
-        try:
-            for widget in self.root.winfo_children():
-                widget.destroy()
-        except Exception as e:
-            print(f"Error clearing UI: {e}")
+        response = session.post(urljoin(CLOUD_DOMAIN, '/api/search_record'), json=data, headers=headers)
     
-    def run(self):
+        data = response.json()
+        if response.status_code != 200:
+            self.popup(data['error'])
+        else:
+            self.popup_table(data)
+        
+    def popup_table(self, data):
+        window = QDialog(self)
+        window.setWindowTitle("Search Results")
+
+        table = QTableWidget()
+        table.setColumnCount(len(data[0])) 
+        table.setRowCount(len(data))
+
+        headers = list(data[0].keys())
+        table.setHorizontalHeaderLabels(headers)
+
+        for row_num, row_data in enumerate(data):
+            for col_num, col_data in enumerate(row_data.values()):
+                item = QTableWidgetItem(str(col_data))
+                table.setItem(row_num, col_num, item)
+
+        layout = QVBoxLayout()
+        layout.addWidget(table)
+        window.setLayout(layout)
+        window.exec()
+ 
+    @pyqtSlot()
+    def on_view_button_clicked(self):
+        self.show_view()
+    
+    def show_view(self):
+        w = Ui_ViewWindow()
+        w.setupUi(self)
+        self.view_uid = w.UID
+        self.view_combo_box = w.collection
+    
+    @pyqtSlot()
+    def on_view_api_button_clicked(self):
+        headers = {'Authorization': self.token}
+        data = {
+            'uid': self.view_uid.text(),
+            'collection_name': self.view_combo_box.currentText()
+        }
+        response = session.post(urljoin(CLOUD_DOMAIN, '/api/view_patient_record'), json=data, headers=headers)
+        
+        data = response.json()
+        if response.status_code != 200:
+            self.popup(data['error'])
+        else:
+            try:
+                if data['patient_data'] == []:
+                    raise Exception('None')
+
+                patient_data = data['patient_data'][0]
+                
+                enc_data = patient_data['file_data'].encode()
+                plain, msg = self.decrypt_phase(enc_data)
+                
+                if plain:
+                    DOWNLOAD_PATH = './download/'
+                    file_name = patient_data['file_name']
+                    with open(DOWNLOAD_PATH+file_name, 'wb') as file:
+                        file.write(plain)  
+                        
+                    msg = "UID: " + patient_data['uid'] + '\n' + \
+                        "Patient Name: " + patient_data['patient_name'] + '\n' + \
+                        "Attachment Name: " + patient_data['file_name'] + \
+                        '\nThe attachment has been downloaded successfully in "download/"'
+                            
+                    self.popup(msg, title="SUCCESS")
+                elif plain == False:
+                    self.popup(msg)
+            except Exception as e:
+                if str(e) == 'None':
+                    self.popup("There's no data with the provided UID.\nPlease generate a profile for it.")    
+                else:
+                    print(e)
+                    
+    @pyqtSlot()
+    def on_upload_button_clicked(self):
+        self.show_push()
+    
+    def show_push(self):
+        w = Ui_PushWindow()
+        w.setupUi(self)
+        self.push_uid = w.UID
+        self.push_name = w.NAME
+        self.file_name = w.FileName
+        self.combo_box = w.collection
+    
+    @pyqtSlot()
+    def on_push_button_clicked(self):
+        if os.path.isfile(self.file_name.text()):
+            headers = {'Authorization': self.token}
+            
+            UPDATE_POLICIES = {
+                'health_record': ['doctor', 'nurse', 'patient'],
+                'medicine_record': ['doctor', 'pharmacist', 'patient'],
+                'financial_record': ['financial'],
+                'research_record': ['doctor', 'researcher'],
+            }    
+                    
+            POLICY = UPDATE_POLICIES[self.combo_box.currentText()]        
+            user_attr = [attr.lower() for attr in self.attribute]
+            final_policy = self.convert_policy(POLICY, user_attr, self.push_uid.text())
+            
+            with open(self.file_name.text(), 'rb') as file:
+                file_data = file.read()
+            enc_data = self.encrypt_phase(final_policy, file_data)
+            
+            patient_data = {
+                'uid': self.push_uid.text(),
+                'patient_name': self.push_name.text(),
+                'file_name': self.file_name.text().split('/')[-1],
+                'file_data': enc_data.decode()
+            }
+            data = {
+                'collection_name': self.combo_box.currentText(),
+                'patient_data': patient_data
+            }
+            response = session.post(urljoin(CLOUD_DOMAIN, '/api/upload_patient_record'), json=data, headers=headers)
+            
+            data = response.json()
+            if response.status_code != 200:
+                self.popup(data['error'])
+            else:
+                self.popup(data['message'], title="SUCCESS")
+        else:
+            self.popup("The file is not exist.\nPlease check the path again!")
+    
+    
+    @pyqtSlot()
+    def on_update_button_clicked(self):
+        self.show_update()
+
+    def show_update(self):
+        w = Ui_UpdateWindow()
+        w.setupUi(self)
+        self.update_uid = w.UID
+        self.update_name = w.NAME
+        self.update_file_name = w.FileName
+        self.update_combo_box = w.collection
+
+    @pyqtSlot()
+    def on_update_api_button_clicked(self):
+        if os.path.isfile(self.update_file_name.text()):
+            headers = {'Authorization': self.token}
+            
+            # Decrypt data to check if user be able to update
+            
+            data = {
+                'uid': self.update_uid.text(),
+                'collection_name': self.update_combo_box.currentText()
+            }
+            response = session.post(urljoin(CLOUD_DOMAIN, '/api/view_patient_record'), json=data, headers=headers)
+            
+            data = response.json()
+            if response.status_code != 200:
+                self.popup(data['error'])
+            else:
+                patient_data = data['patient_data'][0]
+        
+                enc_data = patient_data['file_data'].encode()
+                plain, msg = self.decrypt_phase(enc_data)
+                if plain is not False:
+
+                # Encrypt data to Update
+                
+                    UPDATE_POLICIES = {
+                        'health_record': ['doctor', 'nurse', 'patient'],
+                        'medicine_record': ['doctor', 'pharmacist', 'patient'],
+                        'financial_record': ['financial'],
+                        'research_record': ['doctor', 'researcher'],
+                    }    
+                    
+                    POLICY = UPDATE_POLICIES[self.update_combo_box.currentText()]        
+                    user_attr = [attr.lower() for attr in self.attribute]
+                    final_policy = self.convert_policy(POLICY, user_attr, self.update_uid.text())
+                    
+                    with open(self.update_file_name.text(), 'rb') as file:
+                        file_data = file.read()
+                    enc_data = self.encrypt_phase(final_policy, file_data)
+                    
+                    patient_data = {
+                        'uid': self.update_uid.text(),
+                        'patient_name': self.update_name.text(),
+                        'file_name': self.update_file_name.text().split('/')[-1],
+                        'file_data': enc_data.decode()
+                    }
+                    data = {
+                        'collection_name': self.update_combo_box.currentText(),
+                        'updated_data': patient_data
+                    }
+                    response = session.post(urljoin(CLOUD_DOMAIN, '/api/update_patient_record'), json=data, headers=headers)
+                    
+                    data = response.json()
+                    if response.status_code != 200:
+                        self.popup(data['error'])
+                    else:
+                        self.popup(data['message'], title="SUCCESS")
+                else:
+                    self.popup("You don't have permission to update the data!")
+        else:
+            self.popup("The file is not exist.\nPlease check the path again!")
+    
+    def convert_policy(self, policy, user_attr, text):
+
+        final_policy = []
+        for p in policy:
+            tmp = 0
+            for p2 in user_attr:
+                if p in p2:
+                    final_policy.append(p2)
+                    tmp = 1
+                    continue
+            if p == 'patient':
+                p = "{}_{}".format(p, text)
+            if tmp == 0:
+                final_policy.append(p)       
+
+        final_policy = [p.replace('_', '').lower() for p in list(set(final_policy))]
+        final_policy = ' or '.join(final_policy)
+        
+        return final_policy
+    
+    def encrypt_phase(self, final_policy, file_data):
+        aes = SelfAES() ; abe = ABE()
+        enc = b64encode(aes.encrypt(file_data))
+        key = aes.getKey()
+        enc_key = abe.encrypt(self.pk_key, key, final_policy)
+        enc_key = objectToBytes(enc_key, abe.group)
+        enc_data = enc_key + abe.sign + enc
+        
+        return enc_data
+    
+    def decrypt_phase(self, enc_data):
+        aes = SelfAES(); abe = ABE()
+        enc_key = enc_data.split(abe.sign)[0]
+        enc = enc_data.split(abe.sign)[1]
+        enc_key = bytesToObject(enc_key, abe.group)
+        
         try:
-            self.root.mainloop()
-        except Exception as e:
-            print(f"Application error: {e}")
+            enc_key = abe.decrypt(self.pk_key, self.dk_key, enc_key)
+            try:
+                plain = aes.decrypt(b64decode(enc), enc_key)   
+                return plain, "SUCCESS"
+            except:
+                return False, "Failed to decrypt the data. Please try again"
+        except:
+            return False, "You don't have permission to decrypt the data!"
+            
+    
+    @pyqtSlot()
+    def on_back_button_clicked(self):
+        self.show_menu()
+    
+    def popup(self, message, title="ERROR"):
+        window = QMessageBox(self)
+        window.setWindowTitle(title)
+        window.setText(message)
+        window.exec()
+
 
 if __name__ == "__main__":
-    try:
-        app = HealthcareApp()
-        app.run()
-    except Exception as e:
-        print(f"Failed to start application: {e}")
+    app = QApplication([])
+    main_window = MainWindow()
+    main_window.show()
+    app.exec()

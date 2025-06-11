@@ -1,4 +1,4 @@
-from charm.toolbox.pairinggroup import PairingGroup
+from charm.toolbox.pairinggroup import PairingGroup,ZR,G1,G2,GT,pair
 from charm.adapters.abenc_adapt_hybrid import HybridABEnc
 from charm.schemes.abenc.abenc_bsw07 import CPabe_BSW07
 from charm.core.engine.util import objectToBytes, bytesToObject
@@ -31,7 +31,7 @@ class ABE:
     def __init__(self):
         self.group = PairingGroup('SS512')
         self.cpabe = HybridABEnc(CPabe_BSW07(self.group), self.group)
-        self.sign = b'NHANNHAN'
+        self.sign = b'DEADBEEF'
 
     def encrypt(self, pk, msg, policy):
         self.pk = bytesToObject(pk, self.group)

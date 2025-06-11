@@ -13,7 +13,7 @@ import os
 from abe_core import SelfAES, ABE, objectToBytes, bytesToObject
 from base64 import b64encode, b64decode
 
-TRUSTED_AUTHORITY = "http://localhost:5050" 
+TRUSTED_AUTHORITY = "http://localhost:5000" 
 CLOUD_DOMAIN = "http://localhost:8000"
 
 session = requests.Session()

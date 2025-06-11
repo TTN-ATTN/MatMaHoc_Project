@@ -3,7 +3,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, sessio
 from urllib.parse import urljoin
 import requests, json
 
-CLOUD_DOMAIN = "https://hackeverythingsgg.id.vn"
+CLOUD_DOMAIN =  "http://localhost:8000" 
 
 login_api = Blueprint('login_api', __name__, template_folder='template')
 
